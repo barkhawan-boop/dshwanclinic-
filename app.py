@@ -51,8 +51,7 @@ TLS_KEY = setting("MMC_TLS_KEY", "tls_key", "")
 
 DEFAULT_DEPARTMENTS = [
     ("Doctors", "doctor"), ("Nursing", "nurse"), ("Secretariat", "secretary"),
-    ("Echo lab 1", "lab"), ("Echo lab 2", "lab"), ("Blood test lab 1", "lab"),
-    ("Blood test lab 2", "lab"), ("TMT lab 1", "lab"), ("TMT lab 2", "lab"),
+    ("Echo lab 1", "lab"), ("Blood test lab 1", "lab"), ("TMT lab 1", "lab"),
     ("Radiology", "lab"), ("Sonar", "lab"), ("Sleep room", "lab"), ("Pharmacy", "pharmacy"),
     ("Accounting", "accountant"), ("Human resources", "hr"), ("IT administration", "admin"),
 ]
@@ -60,10 +59,9 @@ DEFAULT_USERS = [
     ("D.Shwan", "doctor", "Doctors"), ("Payam", "secretary", "Secretariat"),
     ("Resident doctor", "resident", "Doctors"), ("Sakar", "head_secretary", "Secretariat"),
     ("Echo lab", "lab", "Echo lab 1"), ("Blood test lab", "lab", "Blood test lab 1"),
-    ("Echo lab 2", "lab", "Echo lab 2"), ("Blood test lab 2", "lab", "Blood test lab 2"),
-    ("TMT lab 1", "lab", "TMT lab 1"), ("TMT lab 2", "lab", "TMT lab 2"),
+    ("TMT lab 1", "lab", "TMT lab 1"),
     ("Radiology", "lab", "Radiology"), ("Sonar", "lab", "Sonar"),
-    ("Sleep room", "lab", "Sleep room"), ("Nurse station", "nurse", "Nursing"), ("Pharmacy", "pharmacy", "Pharmacy"),
+    ("Sleep room", "lab", "Sleep room"), ("Pharmacy", "pharmacy", "Pharmacy"),
     ("M.Ramazan", "accountant", "Accounting"), ("IT", "admin", "IT administration"),
     ("Kak Othman", "staff", "Human resources"),
 ]
@@ -139,6 +137,23 @@ def init_db() -> None:
         c.executescript(SCHEMA)
         for name, kind in DEFAULT_DEPARTMENTS:
             c.execute("INSERT OR IGNORE INTO departments(name,kind) VALUES(?,?)", (name, kind))
+        # Hide the removed duplicate sign-in tiles on existing installations while
+        # retaining the accounts and completed clinical history in the database.
+        removed_users = ("Blood test lab 2", "Echo lab 2", "Nurse station", "TMT lab 2")
+        marks = ",".join("?" for _ in removed_users)
+        c.execute(f"UPDATE users SET active=0 WHERE name IN ({marks})", removed_users)
+        c.execute(f"DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE name IN ({marks}))", removed_users)
+
+        # Send any unfinished work from the retired second labs to the remaining lab.
+        retired_labs = (("Echo lab 2", "Echo lab 1"), ("Blood test lab 2", "Blood test lab 1"), ("TMT lab 2", "TMT lab 1"))
+        for retired_name, active_name in retired_labs:
+            retired = c.execute("SELECT id FROM departments WHERE name=?", (retired_name,)).fetchone()
+            active = c.execute("SELECT id FROM departments WHERE name=? AND active=1", (active_name,)).fetchone()
+            if not retired:
+                continue
+            if active:
+                c.execute("UPDATE lab_orders SET department_id=? WHERE department_id=? AND status!='completed'", (active["id"], retired["id"]))
+            c.execute("UPDATE departments SET active=0 WHERE id=?", (retired["id"],))
         for name, role, dept in DEFAULT_USERS:
             if c.execute("SELECT 1 FROM users WHERE name=?", (name,)).fetchone():
                 continue
@@ -374,7 +389,7 @@ def admin_page(u: sqlite3.Row) -> str:
         depts=c.execute("SELECT * FROM departments ORDER BY name").fetchall()
     rows=''.join(f'<tr><td>{e(x["name"])}</td><td>{e(x["role"])}</td><td>{e(x["department"] or "—")}</td><td>{"Active" if x["active"] else "Disabled"}</td></tr>' for x in users)
     drows=''.join(f'<tr><td>{e(d["name"])}</td><td>{e(d["kind"])}</td><td>{"Active" if d["active"] else "Disabled"}</td></tr>' for d in depts)
-    opts=''.join(f'<option>{e(d["name"])}</option>' for d in depts)
+    opts=''.join(f'<option>{e(d["name"])}</option>' for d in depts if d["active"])
     roles=['doctor','resident','nurse','secretary','head_secretary','lab','pharmacy','accountant','hr','admin','staff']
     return f'''<section class="page-title"><p class="kicker">IT administration</p><h1>Users and departments</h1><p>Changes are recorded in the audit log. Default PINs should be changed before live clinical use.</p></section><div class="split"><section class="panel"><h2>Create user</h2><form method="post" action="/admin/user" class="form-grid">{form_csrf(u)}{field('name','Full name',required=True)}<label class="field"><span>Role</span><select name="role">{''.join(f'<option value="{r}">{e(r.replace("_"," ").title())}</option>' for r in roles)}</select></label><label class="field"><span>Department</span><select name="department">{opts}</select></label>{field('pin','Initial four-digit PIN',DEFAULT_PIN,required=True,pattern='[0-9]{4}',maxlength='4')}<div class="full">{btn('Create user','gold')}</div></form></section><section class="panel"><h2>Create department</h2><form method="post" action="/admin/department" class="form-grid">{form_csrf(u)}{field('name','Department name',required=True)}<label class="field"><span>Department type</span><select name="kind">{''.join(f'<option value="{r}">{r.title()}</option>' for r in roles)}</select></label><div class="full">{btn('Create department','gold')}</div></form></section></div><section class="panel"><h2>Accounts</h2><div class="table-scroll"><table><thead><tr><th>Name</th><th>Role</th><th>Department</th><th>State</th></tr></thead><tbody>{rows}</tbody></table></div></section><section class="panel"><h2>Departments</h2><div class="table-scroll"><table><thead><tr><th>Name</th><th>Type</th><th>State</th></tr></thead><tbody>{drows}</tbody></table></div></section>'''
 
@@ -587,7 +602,7 @@ class Handler(BaseHTTPRequestHandler):
                 code=str(d.get("test_code", "")); details=str(d.get("test_details", ""))[:1000]
                 if code:
                     if code not in TESTS: raise ValueError("Unknown test type.")
-                    lab_names={"echo":["Echo lab 1","Echo lab 2"],"pft":["Echo lab 1","Echo lab 2"],"ecg":["Echo lab 1","Echo lab 2"],"holter":["Echo lab 1","Echo lab 2"],"pressure":["Echo lab 1","Echo lab 2"],"blood":["Blood test lab 1","Blood test lab 2"],"tmt":["TMT lab 1","TMT lab 2"]}.get(code,[TESTS[code][1]])
+                    lab_names={"echo":["Echo lab 1"],"pft":["Echo lab 1"],"ecg":["Echo lab 1"],"holter":["Echo lab 1"],"pressure":["Echo lab 1"],"blood":["Blood test lab 1"],"tmt":["TMT lab 1"]}.get(code,[TESTS[code][1]])
                     marks=','.join('?' for _ in lab_names)
                     dept=c.execute(f"SELECT d.id FROM departments d LEFT JOIN lab_orders o ON o.department_id=d.id AND o.status IN ('ordered','in_progress') WHERE d.name IN ({marks}) AND d.active=1 GROUP BY d.id ORDER BY COUNT(o.id),d.name LIMIT 1",lab_names).fetchone()
                     if not dept: raise ValueError("The target lab department does not exist. Add it in IT administration.")
