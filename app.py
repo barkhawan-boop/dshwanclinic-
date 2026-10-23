@@ -59,7 +59,7 @@ DEFAULT_USERS = [
     ("D.Shwan", "doctor", "Doctors"), ("Payam", "secretary", "Secretariat"),
     ("Resident doctor", "resident", "Doctors"), ("Sakar", "head_secretary", "Secretariat"),
     ("Echo lab", "lab", "Echo lab 1"), ("Blood test lab", "lab", "Blood test lab 1"),
-    ("TMT lab 1", "lab", "TMT lab 1"),
+    ("TMT", "lab", "TMT lab 1"),
     ("Radiology", "lab", "Radiology"), ("Sonar", "lab", "Sonar"),
     ("Sleep room", "lab", "Sleep room"), ("Pharmacy", "pharmacy", "Pharmacy"),
     ("M.Ramazan", "accountant", "Accounting"), ("IT", "admin", "IT administration"),
@@ -143,6 +143,14 @@ def init_db() -> None:
         marks = ",".join("?" for _ in removed_users)
         c.execute(f"UPDATE users SET active=0 WHERE name IN ({marks})", removed_users)
         c.execute(f"DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE name IN ({marks}))", removed_users)
+
+        # Keep the existing TMT account and department, but shorten its display name.
+        old_tmt_user = c.execute("SELECT id FROM users WHERE name='TMT lab 1'").fetchone()
+        new_tmt_user = c.execute("SELECT id FROM users WHERE name='TMT'").fetchone()
+        if old_tmt_user and not new_tmt_user:
+            c.execute("UPDATE users SET name='TMT' WHERE id=?", (old_tmt_user["id"],))
+        elif old_tmt_user and new_tmt_user:
+            c.execute("UPDATE users SET active=0 WHERE id=?", (old_tmt_user["id"],))
 
         # Send any unfinished work from the retired second labs to the remaining lab.
         retired_labs = (("Echo lab 2", "Echo lab 1"), ("Blood test lab 2", "Blood test lab 1"), ("TMT lab 2", "TMT lab 1"))
