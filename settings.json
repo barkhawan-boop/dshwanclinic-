@@ -1,0 +1,16 @@
+{
+  "app_name": "Mamostayan Medical Complex Offline System",
+  "host": "0.0.0.0",
+  "port": 8000,
+  "data_dir": "data",
+  "database_path": "data/clinic.db",
+  "archive_dir": "F:\\lab test",
+  "max_upload_mb": 30,
+  "session_hours": 12,
+  "python_executable": "C:\\Users\\W10\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+  "default_pin": "1122",
+  "admin_pin": "3344",
+  "startup_task": "MMC Offline Clinic Server",
+  "tls_cert": "",
+  "tls_key": ""
+}
